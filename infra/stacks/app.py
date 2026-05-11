@@ -128,7 +128,7 @@ class AppStack(Stack):
         lambda_oac = cloudfront.FunctionUrlOriginAccessControl(
             self,
             "LambdaOAC",
-            signing=cloudfront.Signing.sigv4_always(),
+            signing=cloudfront.Signing.SIGV4_ALWAYS,
         )
 
         # --- CloudFront ---------------------------------------------------
