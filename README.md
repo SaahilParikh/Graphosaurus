@@ -1,6 +1,6 @@
-# PythonGraphs
+# Graphosaurus
 
-Tiny, embarrassingly-parallel program that turns a **dictionary + thesaurus**
+Tiny, embarrassingly-hyper-parallel program that turns a **dictionary + thesaurus**
 into one graph per word. For each word in the dictionary it builds an *ego
 graph*: a BFS traversal through thesaurus relationships, up to a configurable
 depth, filtered to words that exist in the dictionary.
