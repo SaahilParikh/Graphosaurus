@@ -32,3 +32,7 @@ node_modules/
 # Local env files
 .env
 .env.local
+
+# Python virtual environments (e.g. infra/.venv/ for local CDK dev)
+.venv/
+**/.venv/
