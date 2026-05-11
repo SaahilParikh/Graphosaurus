@@ -110,11 +110,12 @@ pytest -q
 
 ## Deployment
 
-Deployed automatically to **[parikhsaahil.com](https://parikhsaahil.com)**
+Deployed automatically to **[graphosaurus.com](https://graphosaurus.com)**
 on every push to `main` via GitHub Actions. Two CDK stacks in
 [`infra/`](./infra/):
 
-- `PythonGraphsBootstrap` (run once) — Route53 zone, ACM cert, GitHub OIDC
+- `PythonGraphsBootstrap` (run once) — imports the Route53 zone, creates
+  ACM cert, GitHub OIDC provider, CI role
 - `PythonGraphsApp` (deployed by CI) — Lambda container + CloudFront +
   Route53 aliases
 

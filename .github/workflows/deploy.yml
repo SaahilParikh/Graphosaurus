@@ -41,7 +41,7 @@ jobs:
     env:
       # These match stacks/bootstrap.py:BootstrapStack ci_role.
       AWS_REGION: us-east-1
-      AWS_ROLE_ARN: arn:aws:iam::***AWS_ACCOUNT_ID_LEGACY***:role/PythonGraphsGithubDeployRole
+      AWS_ROLE_ARN: arn:aws:iam::***AWS_ACCOUNT_ID***:role/PythonGraphsGithubDeployRole
     steps:
       - uses: actions/checkout@v4
 

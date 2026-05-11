@@ -2,9 +2,8 @@
 """CDK app entry. Two stacks:
 
 - PythonGraphsBootstrap: run ONCE locally by a human with admin creds.
-    Creates the Route53 zone, ACM cert, GitHub OIDC trust, CI role, and
-    delegates NS records at the registrar. Re-running is idempotent but
-    unnecessary.
+    Imports the existing Route53 zone, creates ACM cert, GitHub OIDC trust,
+    and CI role. Re-running is idempotent but unnecessary.
 
 - PythonGraphsApp: deployed by CI on every push to main. Creates the
     Lambda, Function URL, CloudFront distribution, and alias records.
@@ -26,15 +25,19 @@ from stacks.app import AppStack
 
 # Single source of truth for these config values. If you fork the project,
 # change these (and the account ID) and everything else follows.
-DOMAIN_NAME = "parikhsaahil.com"
+DOMAIN_NAME = "graphosaurus.com"
+# The existing hosted zone id. Route53 Registrar auto-creates this when a
+# domain is registered through Amazon. We import it instead of creating a
+# new one to avoid duplicates (and to reuse the NS records the registrar
+# already wired up at the domain).
+HOSTED_ZONE_ID = "***HOSTED_ZONE_ID***"
 GITHUB_OWNER = "SaahilParikh"
 GITHUB_REPO = "PythonGraphs"
 
-# Personal Isengard account. Region is us-east-1 because:
-#   1) CloudFront viewer certs *must* be in us-east-1
-#   2) Route53 Domains APIs are only in us-east-1
-# So putting both stacks there avoids cross-region coordination.
-AWS_ACCOUNT = os.environ.get("CDK_DEFAULT_ACCOUNT", "***AWS_ACCOUNT_ID_LEGACY***")
+# Personal AWS account. Region is us-east-1 because CloudFront viewer certs
+# must be in us-east-1, so putting both stacks there avoids cross-region
+# coordination.
+AWS_ACCOUNT = os.environ.get("CDK_DEFAULT_ACCOUNT", "***AWS_ACCOUNT_ID***")
 AWS_REGION = os.environ.get("CDK_DEFAULT_REGION", "us-east-1")
 
 env = Environment(account=AWS_ACCOUNT, region=AWS_REGION)
@@ -46,6 +49,7 @@ BootstrapStack(
     "PythonGraphsBootstrap",
     env=env,
     domain_name=DOMAIN_NAME,
+    hosted_zone_id=HOSTED_ZONE_ID,
     github_owner=GITHUB_OWNER,
     github_repo=GITHUB_REPO,
 )

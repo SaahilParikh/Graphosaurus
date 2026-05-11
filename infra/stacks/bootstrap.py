@@ -3,34 +3,22 @@
 Run once, locally, by a human with admin creds on the target AWS account.
 Everything in here is idempotent but not expected to change often:
 
-1. Route53 public hosted zone for the domain.
+1. Imports the existing Route53 public hosted zone for the domain. Route53
+   Registrar auto-creates the zone when the domain is registered through
+   Amazon, so we reuse it rather than creating a duplicate.
 2. ACM certificate for the domain (+ www subdomain), DNS-validated via the
-   zone. Will hang on validation until the domain's NS records at its
-   registrar are pointed at this zone -- see BOOTSTRAP.md.
+   imported zone. Because the zone is already the authoritative NS for the
+   domain (set by the registrar at creation), validation succeeds within
+   a couple of minutes.
 3. GitHub OIDC provider and an IAM role the CI pipeline assumes. No
    long-lived AWS access keys live in GitHub.
 4. SSM parameters exposing zone id + cert arn so the app stack can pick
    them up without in-app cross-stack references.
-
-Note on NS delegation
----------------------
-Earlier versions of this stack tried to automate `route53domains:
-UpdateDomainNameservers`. That only works if the domain is registered in
-the SAME account this stack deploys into. In our case, parikhsaahil.com is
-registered in a different account (or with a non-Route53Domains registrar),
-so the API call fails with "Domain not found in account".
-
-The NS delegation step is therefore documented as a manual action in
-BOOTSTRAP.md: after `cdk deploy PythonGraphsBootstrap` creates the zone,
-read the 4 NS records it emits as CfnOutput, then update them at whichever
-registrar owns the domain.
 """
 from __future__ import annotations
 
 from aws_cdk import (
     CfnOutput,
-    Fn,
-    RemovalPolicy,
     Stack,
     aws_certificatemanager as acm,
     aws_iam as iam,
@@ -54,31 +42,29 @@ class BootstrapStack(Stack):
         construct_id: str,
         *,
         domain_name: str,
+        hosted_zone_id: str,
         github_owner: str,
         github_repo: str,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # --- Route53 hosted zone ------------------------------------------
-        # RETAIN: if we ever `cdk destroy` this stack by accident, we don't
-        # want to blow away DNS and break everything pointing at this zone.
-        zone = route53.PublicHostedZone(
+        # --- Import the existing Route53 hosted zone ---------------------
+        # Registering graphosaurus.com through Route53 Registrar already
+        # created a zone and pointed the domain's NS records at it. Using
+        # from_hosted_zone_attributes means CDK does NOT try to create or
+        # delete the zone -- it's externally managed.
+        zone = route53.HostedZone.from_hosted_zone_attributes(
             self,
             "Zone",
+            hosted_zone_id=hosted_zone_id,
             zone_name=domain_name,
-            comment=f"Managed by PythonGraphsBootstrap for {domain_name}",
         )
-        zone.apply_removal_policy(RemovalPolicy.RETAIN)
 
         # --- ACM certificate ----------------------------------------------
-        # Covers apex (parikhsaahil.com) + www. Add more SANs here if we ever
-        # serve other subdomains. DNS-validated so no email wrangling.
-        #
-        # IMPORTANT: this resource will sit in CREATE_IN_PROGRESS until the
-        # domain's NS records at its registrar point at this zone. See
-        # BOOTSTRAP.md step 5. Typical validation takes 1-5 min once NS is
-        # right; can be longer the first time as DNS propagates.
+        # Covers apex + www. DNS-validated through the imported zone.
+        # No manual NS step needed: the registrar already delegated the
+        # domain to this zone, so ACM's DNS probes resolve correctly.
         certificate = acm.Certificate(
             self,
             "Certificate",
@@ -88,22 +74,21 @@ class BootstrapStack(Stack):
         )
 
         # --- GitHub OIDC --------------------------------------------------
-        # One OIDC provider per account is reused by all repos. This construct
-        # is idempotent but if you already have one in the account, import
-        # it with from_open_id_connect_provider_arn(...) instead.
+        # One OIDC provider per account is reused by all repos. If this
+        # account already has one, delete this construct and import the
+        # existing one with from_open_id_connect_provider_arn(...).
         github_oidc = iam.OpenIdConnectProvider(
             self,
             "GithubOidc",
             url="https://token.actions.githubusercontent.com",
             client_ids=["sts.amazonaws.com"],
-            # Thumbprint is AWS's documented constant for the GitHub OIDC
-            # provider. It's rotated rarely; check the AWS docs if token
-            # validation ever fails suddenly.
+            # AWS's documented constant for GitHub's OIDC thumbprint. Rotated
+            # rarely; revisit if token validation suddenly fails.
             thumbprints=["6938fd4d98bab03faadb97b34396831e3780aea1"],
         )
 
-        # IAM role CI assumes. Locked down to this specific repo's main
-        # branch -- forks or other branches can't use it to deploy.
+        # IAM role CI assumes. Locked to this repo's main branch; forks or
+        # other branches can't use it to deploy.
         ci_role = iam.Role(
             self,
             "GithubDeployRole",
@@ -115,8 +100,6 @@ class BootstrapStack(Stack):
                         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
                     },
                     "StringLike": {
-                        # <owner>/<repo>:ref:refs/heads/main  limits it to
-                        # main. Widen to `:*` for all branches/PRs if wanted.
                         "token.actions.githubusercontent.com:sub":
                             f"repo:{github_owner}/{github_repo}:ref:refs/heads/main",
                     },
@@ -126,23 +109,18 @@ class BootstrapStack(Stack):
             description=f"Assumed by GitHub Actions for {github_owner}/{github_repo} to deploy PythonGraphsApp",
         )
 
-        # The role needs to be able to deploy the app stack via CDK. The
-        # cleanest way is to attach the standard CDK deploy role permissions.
-        # For a personal project we'll just grant the CDK-published roles
-        # (cdk-*-deploy-role-*, cdk-*-file-publishing-role-*, etc.) via
-        # assume, which CDK v2 uses to do the actual work.
+        # CDK v2 uses a set of assume-able roles created by `cdk bootstrap`
+        # (cdk-*-deploy-role-*, cdk-*-file-publishing-role-*, etc.) to do
+        # the actual deploy work. Let the CI role assume any of them.
         ci_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["sts:AssumeRole", "sts:TagSession"],
                 resources=[
-                    # The CDK bootstrap stack creates these with known name
-                    # patterns. We allow assuming any of them in this account.
                     f"arn:aws:iam::{self.account}:role/cdk-*",
                 ],
             )
         )
-        # Also allow direct reads of SSM parameters used for cross-stack data,
-        # so the pipeline can print them for debugging.
+        # SSM reads for debugging / output reference in CI logs.
         ci_role.add_to_policy(
             iam.PolicyStatement(
                 actions=["ssm:GetParameter", "ssm:GetParameters"],
@@ -175,21 +153,9 @@ class BootstrapStack(Stack):
             description="IAM role ARN assumed by GitHub Actions CI",
         )
 
-        # --- Human-readable outputs ---------------------------------------
-        # The NS values here are the critical output: you MUST copy these
-        # into whichever registrar owns parikhsaahil.com so ACM can validate
-        # the certificate. See BOOTSTRAP.md step 5.
+        # --- Outputs ------------------------------------------------------
         CfnOutput(self, "DomainName", value=domain_name)
         CfnOutput(self, "ZoneId", value=zone.hosted_zone_id)
-        CfnOutput(
-            self,
-            "NameServers",
-            value=Fn.join(",", zone.hosted_zone_name_servers or []),
-            description=(
-                "MANUAL: copy these 4 NS records into the domain's registrar "
-                "(NS records, not glue). ACM cert is blocked until done."
-            ),
-        )
         CfnOutput(self, "CertificateArn", value=certificate.certificate_arn)
         CfnOutput(
             self,
