@@ -15,17 +15,25 @@ Running `cdk deploy PythonGraphsBootstrap` creates:
 - Route53 public hosted zone for `parikhsaahil.com` (RETAINed, won't be
   deleted if the stack is destroyed).
 - ACM certificate for `parikhsaahil.com` + `www.parikhsaahil.com`,
-  DNS-validated through the zone.
+  DNS-validated through the zone. **Blocks on validation until the
+  domain's NS records at its registrar are updated to point at the zone's
+  nameservers** -- see step 5 below.
 - GitHub OIDC identity provider (`token.actions.githubusercontent.com`).
 - IAM role `PythonGraphsGithubDeployRole` that GitHub Actions assumes. It
   is scoped to **`SaahilParikh/PythonGraphs` on branch `main` only**.
 - Three SSM parameters (`/pythongraphs/route53/zone-id`,
   `/pythongraphs/acm/certificate-arn`, `/pythongraphs/iam/ci-role-arn`)
   so the app stack can find these later.
-- A custom resource that calls `route53domains:UpdateDomainNameservers`
-  to flip the registrar's NS records from `DOMAINCONTROL.COM` to the
-  Route53 nameservers the zone just created. This replaces the "manual NS
-  change at the registrar" step with IaC.
+
+## NS delegation is a manual step
+
+An earlier version of this stack tried to automate
+`route53domains:UpdateDomainNameservers`. That only works if the domain
+is registered in the **same AWS account** where the stack is deployed.
+`parikhsaahil.com` is registered in a different account (or with a
+different registrar), so the API call failed with "Domain not found in
+account". The attempted automation is gone from `stacks/bootstrap.py`;
+you do the NS change yourself in step 5.
 
 ## Prerequisites
 
@@ -76,45 +84,59 @@ cd infra
 cdk deploy PythonGraphsBootstrap
 ```
 
-Expect ~5-10 minutes. The ACM cert validation is the slow part -- it waits
-for the DNS-01 validation records to propagate.
+**Leave this command running.** It will create the zone, OIDC provider,
+IAM role, SSM params quickly (~1 min), then hang on `Certificate` in
+`CREATE_IN_PROGRESS` until step 5 is done (or time out after ~90 min).
 
-The stack outputs (printed at the end) include:
-
-- `CiRoleArn` -- matches the ARN hardcoded in
-  `.github/workflows/deploy.yml` (`PythonGraphsGithubDeployRole`). Verify
-  they match.
-- `NameServers` -- the four Route53 NS records. The registrar delegation
-  is automated; this is for your reference.
-- `DomainName`, `ZoneId`, `CertificateArn`.
-
-### 5. Verify DNS is delegated
-
-This should be automatic via the `DelegateNameservers` custom resource, but
-it's worth confirming:
+Before you do step 5, pull the NS records from another terminal:
 
 ```bash
-dig +short parikhsaahil.com NS
-# should now return 4 lines like ns-123.awsdns-45.com.
-# NOT NS65.DOMAINCONTROL.COM (what it was before bootstrap).
+aws cloudformation describe-stacks \
+  --profile personal-b --region us-east-1 \
+  --stack-name PythonGraphsBootstrap \
+  --query 'Stacks[0].Outputs[?OutputKey==`NameServers`].OutputValue' \
+  --output text
 ```
 
-If it still shows DOMAINCONTROL.COM, the custom resource may have failed
-(common cause: the domain isn't registered in this account). Fix manually:
+You'll get a comma-separated list like
+`ns-123.awsdns-45.com.,ns-678.awsdns-90.net.,...`. Four names.
+
+### 5. Delegate DNS at the registrar (manual)
+
+Log in to whichever account/registrar owns `parikhsaahil.com`. Replace the
+current nameservers (`NS65/66.DOMAINCONTROL.COM`) with the four returned
+above.
+
+**If the domain is in a different AWS account via Route53 Domains:**
 
 ```bash
+# Switch to whichever profile owns the domain:
 aws route53domains update-domain-nameservers \
+  --profile <domain-owning-profile> \
   --region us-east-1 \
   --domain-name parikhsaahil.com \
   --nameservers \
-     Name=<ns1-from-stack-output> \
-     Name=<ns2-from-stack-output> \
-     Name=<ns3-from-stack-output> \
-     Name=<ns4-from-stack-output>
+     Name=ns-XXX.awsdns-YY.com \
+     Name=ns-XXX.awsdns-YY.net \
+     Name=ns-XXX.awsdns-YY.org \
+     Name=ns-XXX.awsdns-YY.co.uk
 ```
 
-NS propagation across the internet takes minutes to hours; ACM validation
-may need to wait.
+(The 4 names come from the CloudFormation output above. Strip any trailing
+`.` before passing.)
+
+**If the domain is registered elsewhere** (Namecheap, GoDaddy, etc.):
+update the NS records through that registrar's console.
+
+Verify from a third terminal:
+
+```bash
+dig +short parikhsaahil.com NS
+# Should return the 4 Route53 NS. May take 5-15 min to propagate.
+```
+
+Once DNS is propagated, ACM validation unblocks within a couple of minutes
+and the `cdk deploy` from step 4 completes.
 
 ## After bootstrap: CI takes over
 

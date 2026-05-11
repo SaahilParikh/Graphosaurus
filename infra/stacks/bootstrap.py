@@ -4,15 +4,26 @@ Run once, locally, by a human with admin creds on the target AWS account.
 Everything in here is idempotent but not expected to change often:
 
 1. Route53 public hosted zone for the domain.
-2. AwsCustomResource that calls route53domains:UpdateDomainNameservers --
-   auto-delegates the registrar to use the zone's NS records. Replaces
-   the one manual step ("change nameservers at Amazon Registrar").
-3. ACM certificate for the domain (+ wildcard for subdomains), DNS-validated
-   via the zone.
-4. GitHub OIDC provider and an IAM role the CI pipeline assumes. No
+2. ACM certificate for the domain (+ www subdomain), DNS-validated via the
+   zone. Will hang on validation until the domain's NS records at its
+   registrar are pointed at this zone -- see BOOTSTRAP.md.
+3. GitHub OIDC provider and an IAM role the CI pipeline assumes. No
    long-lived AWS access keys live in GitHub.
-5. SSM parameters exposing zone id + cert arn so the app stack can pick
+4. SSM parameters exposing zone id + cert arn so the app stack can pick
    them up without in-app cross-stack references.
+
+Note on NS delegation
+---------------------
+Earlier versions of this stack tried to automate `route53domains:
+UpdateDomainNameservers`. That only works if the domain is registered in
+the SAME account this stack deploys into. In our case, parikhsaahil.com is
+registered in a different account (or with a non-Route53Domains registrar),
+so the API call fails with "Domain not found in account".
+
+The NS delegation step is therefore documented as a manual action in
+BOOTSTRAP.md: after `cdk deploy PythonGraphsBootstrap` creates the zone,
+read the 4 NS records it emits as CfnOutput, then update them at whichever
+registrar owns the domain.
 """
 from __future__ import annotations
 
@@ -25,7 +36,6 @@ from aws_cdk import (
     aws_iam as iam,
     aws_route53 as route53,
     aws_ssm as ssm,
-    custom_resources as cr,
 )
 from constructs import Construct
 
@@ -61,53 +71,14 @@ class BootstrapStack(Stack):
         )
         zone.apply_removal_policy(RemovalPolicy.RETAIN)
 
-        # --- Automate NS delegation at the registrar ----------------------
-        # Amazon Registrar (where parikhsaahil.com is registered) stores the
-        # domain's authoritative nameservers. They currently point to
-        # DOMAINCONTROL.COM; we need them to point to this zone's NS records.
-        # This custom resource calls route53domains:UpdateDomainNameservers
-        # during stack deploy. Runs once on create; no-op on update.
-        #
-        # IMPORTANT: only works if the domain is registered IN this account
-        # (route53domains is per-account). If someone else owns the domain,
-        # delete this construct and do the NS change manually at whatever
-        # registrar owns it.
-        delegate_ns = cr.AwsCustomResource(
-            self,
-            "DelegateNameservers",
-            on_create=cr.AwsSdkCall(
-                service="Route53Domains",
-                action="updateDomainNameservers",
-                # Route53 auto-populates zone.hosted_zone_name_servers with
-                # exactly 4 nameserver names. CloudFormation Fn::Select lets
-                # us index into that token at deploy time.
-                parameters={
-                    "DomainName": domain_name,
-                    "Nameservers": [
-                        {"Name": Fn.select(0, zone.hosted_zone_name_servers or [])},
-                        {"Name": Fn.select(1, zone.hosted_zone_name_servers or [])},
-                        {"Name": Fn.select(2, zone.hosted_zone_name_servers or [])},
-                        {"Name": Fn.select(3, zone.hosted_zone_name_servers or [])},
-                    ],
-                },
-                physical_resource_id=cr.PhysicalResourceId.of(
-                    f"ns-delegation-{domain_name}"
-                ),
-            ),
-            # No update action: if we change zones, CloudFormation will
-            # replace this custom resource (new physical id) and re-delegate.
-            policy=cr.AwsCustomResourcePolicy.from_statements([
-                iam.PolicyStatement(
-                    actions=["route53domains:UpdateDomainNameservers"],
-                    resources=["*"],
-                )
-            ]),
-        )
-        delegate_ns.node.add_dependency(zone)
-
         # --- ACM certificate ----------------------------------------------
         # Covers apex (parikhsaahil.com) + www. Add more SANs here if we ever
         # serve other subdomains. DNS-validated so no email wrangling.
+        #
+        # IMPORTANT: this resource will sit in CREATE_IN_PROGRESS until the
+        # domain's NS records at its registrar point at this zone. See
+        # BOOTSTRAP.md step 5. Typical validation takes 1-5 min once NS is
+        # right; can be longer the first time as DNS propagates.
         certificate = acm.Certificate(
             self,
             "Certificate",
@@ -205,20 +176,24 @@ class BootstrapStack(Stack):
         )
 
         # --- Human-readable outputs ---------------------------------------
-        # These show up in `cdk deploy` logs and the CloudFormation console.
-        # Copy the CI role ARN into the GitHub Actions workflow.
+        # The NS values here are the critical output: you MUST copy these
+        # into whichever registrar owns parikhsaahil.com so ACM can validate
+        # the certificate. See BOOTSTRAP.md step 5.
         CfnOutput(self, "DomainName", value=domain_name)
         CfnOutput(self, "ZoneId", value=zone.hosted_zone_id)
         CfnOutput(
             self,
             "NameServers",
             value=Fn.join(",", zone.hosted_zone_name_servers or []),
-            description="Route53 nameservers (auto-delegated, no action needed)",
+            description=(
+                "MANUAL: copy these 4 NS records into the domain's registrar "
+                "(NS records, not glue). ACM cert is blocked until done."
+            ),
         )
         CfnOutput(self, "CertificateArn", value=certificate.certificate_arn)
         CfnOutput(
             self,
             "CiRoleArn",
             value=ci_role.role_arn,
-            description="Paste into .github/workflows/deploy.yml as role-to-assume",
+            description="Matches the ARN hardcoded in .github/workflows/deploy.yml",
         )
