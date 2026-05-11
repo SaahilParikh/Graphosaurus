@@ -77,6 +77,17 @@ class AppStack(Stack):
             directory="..",
             file="infra/lambda/Dockerfile",
             platform=ecr_assets.Platform.LINUX_AMD64,
+            # Defense in depth: also listed in root .dockerignore. Without
+            # these, cdk.out gets copied into itself (ENAMETOOLONG recursion).
+            exclude=[
+                "**/cdk.out",
+                "**/.venv",
+                "**/__pycache__",
+                "**/.pytest_cache",
+                "out/**",
+                ".git",
+                "Untitled.ipynb",
+            ],
         )
 
         # --- Lambda -------------------------------------------------------

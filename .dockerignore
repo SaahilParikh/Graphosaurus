@@ -28,3 +28,11 @@ Dockerfile
 # Editor/IDE cruft.
 .vscode
 .idea
+
+# CDK build artifacts and local venvs (CRITICAL: without this, CDK's
+# DockerImageAsset recursively copies cdk.out into itself during staging
+# and blows up with ENAMETOOLONG).
+**/cdk.out
+**/.venv
+**/.pytest_cache
+**/__pycache__
