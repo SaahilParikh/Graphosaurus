@@ -130,6 +130,19 @@ _WIKTIONARY_API = "https://en.wiktionary.org/w/api.php"
 _SKIP_TAGS = {"style", "script", "sup"}
 _VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "source", "track"}
 
+# Match the Etymology heading anchor. Wiktionary IDs it as "Etymology",
+# "Etymology_1", "Etymology_2", etc. when a word has multiple etymologies.
+# MediaWiki's rendered HTML looks like either:
+#   <div class="mw-heading mw-heading3"><h3 id="Etymology">Etymology</h3>...
+# or the older/mobile form:
+#   <h3><span id="Etymology" class="mw-headline">Etymology</span></h3>
+# We capture the heading-level digit so we know what terminates the section.
+_ETY_HEADING_RE = re.compile(
+    r'<h(?P<level>[2-6])[^>]*\sid="Etymology[^"]*"[^>]*>|'
+    r'<span[^>]*\sid="Etymology[^"]*"[^>]*>',
+    re.IGNORECASE,
+)
+
 
 class _HtmlStripper(_HTMLParser):
     """Collect text content from HTML, suppressing noisy subtrees."""
@@ -187,6 +200,47 @@ def _find_etymology_section(sections: List[Dict[str, Any]]) -> Optional[int]:
     return None
 
 
+def _slice_etymology_html(html: str) -> Optional[str]:
+    """Extract the Etymology subtree from a full Wiktionary HTML page.
+
+    We look for the first heading whose id starts with "Etymology", then
+    take everything up to the next heading of same-or-higher level. This
+    is more reliable than MediaWiki's section API, which occasionally
+    returns content spilling past the etymology (seen on "internet").
+    """
+    m = _ETY_HEADING_RE.search(html)
+    if not m:
+        return None
+
+    # Heading element we matched (<h3...> or <span...>). If it was a span,
+    # find the enclosing <h?> to know the heading level.
+    level_group = m.group("level")
+    if level_group:
+        level = int(level_group)
+    else:
+        # Fallback: span case. Look backwards for the <h?> that contains it.
+        span_start = m.start()
+        lookback = html[max(0, span_start - 200):span_start]
+        lm = re.search(r"<h([2-6])[^>]*>$", lookback)
+        level = int(lm.group(1)) if lm else 3
+
+    # Content starts at the end of the containing heading element. Find the
+    # closing </hN> right after our match, then go from there.
+    # Search for </hN> after the match start.
+    close_re = re.compile(rf"</h{level}>", re.IGNORECASE)
+    after_heading = close_re.search(html, m.start())
+    content_start = after_heading.end() if after_heading else m.end()
+
+    # Terminate at the next heading of same-or-higher level (h2, h3... up to
+    # and including `level`).
+    levels_pat = "".join(str(i) for i in range(2, level + 1))
+    end_re = re.compile(rf"<h[{levels_pat}]\b", re.IGNORECASE)
+    end_match = end_re.search(html, content_start)
+    end = end_match.start() if end_match else len(html)
+
+    return html[content_start:end]
+
+
 def fetch_etymology(word: str, timeout: float = 3.0) -> Optional[str]:
     """Fetch the Etymology section for `word` from Wiktionary as plain text.
 
@@ -201,47 +255,32 @@ def fetch_etymology(word: str, timeout: float = 3.0) -> Optional[str]:
 
     result: Optional[str] = None
     try:
-        # Step 1: locate the Etymology section.
-        sections_url = (
+        # One fetch: full page HTML. We slice the Etymology subtree from
+        # it ourselves, which is more accurate than the section API for
+        # weird entries (short stubs, alternative-form pages).
+        url = (
             f"{_WIKTIONARY_API}?action=parse&page={urllib.parse.quote(w)}"
-            "&prop=sections&format=json&formatversion=2"
+            "&prop=text&format=json&formatversion=2&disabletoc=true"
         )
         req = urllib.request.Request(
-            sections_url,
+            url,
             headers={"User-Agent": "Graphosaurus/1.0 (graphosaurus.com)"},
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.load(resp)
-        sections = data.get("parse", {}).get("sections", [])
-        section_idx = _find_etymology_section(sections)
-        if not section_idx:
-            result = None
-        else:
-            # Step 2: fetch rendered HTML for that section. Wiktionary
-            # pre-expands all templates, so the HTML reads as clean prose.
-            text_url = (
-                f"{_WIKTIONARY_API}?action=parse&page={urllib.parse.quote(w)}"
-                f"&prop=text&section={section_idx}"
-                "&format=json&formatversion=2&disabletoc=true"
-            )
-            req = urllib.request.Request(
-                text_url,
-                headers={"User-Agent": "Graphosaurus/1.0 (graphosaurus.com)"},
-            )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.load(resp)
-            html = data.get("parse", {}).get("text", "")
-            if html:
+        html = data.get("parse", {}).get("text", "")
+        if html:
+            section_html = _slice_etymology_html(html)
+            if section_html:
                 stripper = _HtmlStripper()
-                stripper.feed(html)
+                stripper.feed(section_html)
                 text = stripper.text()
-                # Drop the section header ("Etymology" or "Etymology 1").
-                text = re.sub(
-                    r"^\s*Etymology\s*\d*\s*\n?", "", text, count=1
-                )
-                # Collapse whitespace runs but keep paragraph breaks.
+                # Collapse whitespace but preserve paragraph breaks.
                 text = re.sub(r"[ \t]+", " ", text)
                 text = re.sub(r"\n{3,}", "\n\n", text)
+                text = text.strip()
+                # Drop the literal "Etymology" word if it slipped in.
+                text = re.sub(r"^\s*Etymology\s*\d*\s*\[edit\]?\s*\n?", "", text)
                 text = text.strip()
                 if len(text) >= 10:
                     result = text
