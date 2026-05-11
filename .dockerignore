@@ -1,0 +1,30 @@
+# Git/VCS metadata -- not needed inside the image, and bloats build context.
+.git
+.gitignore
+.gitattributes
+
+# Python build + test caches. Always regenerated, never want baked in.
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+
+# Run outputs. Generated per-invocation; should come from bind mounts at runtime.
+out
+*.json.gz
+
+# Notebooks. The original Untitled.ipynb is 25KB of cell output we don't
+# want in a reproducible image; it's not part of the runnable pipeline.
+*.ipynb
+.ipynb_checkpoints
+
+# macOS noise.
+.DS_Store
+
+# Docker files themselves. Harmless to include but unnecessary.
+Dockerfile
+.dockerignore
+
+# Editor/IDE cruft.
+.vscode
+.idea
