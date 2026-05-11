@@ -1,6 +1,6 @@
 # Graphosaurus
 
-Live at [graphosaurus.com](graphosaurus.com)!
+Live at [graphosaurus.com](https://graphosaurus.com)!
 
 Tiny, embarrassingly-hyper-parallel program that turns a **dictionary + thesaurus**
 into one graph per word. For each word in the dictionary it builds an *ego
