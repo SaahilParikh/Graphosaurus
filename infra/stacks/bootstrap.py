@@ -74,17 +74,20 @@ class BootstrapStack(Stack):
         )
 
         # --- GitHub OIDC --------------------------------------------------
-        # One OIDC provider per account is reused by all repos. If this
-        # account already has one, delete this construct and import the
-        # existing one with from_open_id_connect_provider_arn(...).
-        github_oidc = iam.OpenIdConnectProvider(
+        # The provider is a per-account singleton. Assuming it was created
+        # by a previous CDK deploy or another project, we import it. If no
+        # provider exists yet, create one via the IAM console or:
+        #   aws iam create-open-id-connect-provider \
+        #     --url https://token.actions.githubusercontent.com \
+        #     --client-id-list sts.amazonaws.com \
+        #     --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+        github_oidc = iam.OpenIdConnectProvider.from_open_id_connect_provider_arn(
             self,
             "GithubOidc",
-            url="https://token.actions.githubusercontent.com",
-            client_ids=["sts.amazonaws.com"],
-            # AWS's documented constant for GitHub's OIDC thumbprint. Rotated
-            # rarely; revisit if token validation suddenly fails.
-            thumbprints=["6938fd4d98bab03faadb97b34396831e3780aea1"],
+            open_id_connect_provider_arn=(
+                f"arn:aws:iam::{self.account}:oidc-provider/"
+                f"token.actions.githubusercontent.com"
+            ),
         )
 
         # IAM role CI assumes. Locked to this repo's main branch; forks or
