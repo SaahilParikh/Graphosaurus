@@ -158,8 +158,15 @@ class _HtmlStripper(_HTMLParser):
             return True
         attrs_d = {k: (v or "") for k, v in attrs}
         cls = attrs_d.get("class", "")
-        # Skip footnote markers, "reference" spans, audio players, edit links.
-        if "reference" in cls or "mw-editsection" in cls or "audio" in cls:
+        # Skip footnote markers, reference spans, audio players, edit links,
+        # and the "Etymology tree" visualization widget Wiktionary adds for
+        # some words (class="etytree NavFrame") -- it dumps a flat text
+        # rendering of the tree that muddles the prose.
+        noisy_classes = (
+            "reference", "mw-editsection", "audio",
+            "etytree", "NavFrame", "NavContent", "NavHead",
+        )
+        if any(n in cls for n in noisy_classes):
             return True
         return False
 
