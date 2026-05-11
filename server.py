@@ -109,73 +109,90 @@ def neighborhood_response(
 
 
 # --- Etymology fetching (Wiktionary) ---------------------------------------
+#
+# We used to parse raw wikitext with regex. That worked for words with
+# simple etymologies but produced garbage for common words because
+# Wiktionary's etymology sections are full of templates like {{inh|en|enm|
+# happy}} that expand into prose like "Middle English happy". Our regex
+# couldn't do that expansion -- it just dropped templates or kept their
+# worst arg.
+#
+# Better approach: ask Wiktionary for the PRE-EXPANDED HTML of the
+# Etymology section, then strip tags. Two API calls:
+#   1. prop=sections   -> list of sections; find the one titled "Etymology"
+#   2. prop=text&section=N -> HTML of that section with all templates resolved
+# Results cached per-process. Warm Lambda reuses; cold Lambda repays.
 
-_ETY_RE = re.compile(
-    r"={2,}\s*Etymology[^=]*={2,}\s*\n(.*?)(?=\n={2,}|\Z)", re.DOTALL
-)
-# Simple templates without nesting. We handle nested templates by iterating.
-_TEMPLATE_RE = re.compile(r"\{\{([^{}]*)\}\}")
-_WIKILINK_PIPE_RE = re.compile(r"\[\[[^\]|]+\|([^\]]+)\]\]")
-_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
-_REF_RE = re.compile(r"<ref[^>]*>.*?</ref>", re.DOTALL)
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-# ISO-like language code: 2-4 lowercase letters, optional suffix (e.g. la-new).
-_LANG_CODE_RE = re.compile(r"^[a-z]{2,4}(?:-[a-z0-9]+)*$")
+from html.parser import HTMLParser as _HTMLParser
+
+_WIKTIONARY_API = "https://en.wiktionary.org/w/api.php"
+# We drop the contents of these entirely (noise for etymology text).
+_SKIP_TAGS = {"style", "script", "sup"}
+_VOID_TAGS = {"img", "br", "hr", "input", "meta", "link", "source", "track"}
 
 
-def _extract_template(match: re.Match) -> str:
-    """Replace a Wiktionary template with its most useful piece.
+class _HtmlStripper(_HTMLParser):
+    """Collect text content from HTML, suppressing noisy subtrees."""
 
-    Templates look like {{name|arg1|arg2|...}}. The conventional last-arg is
-    usually the rendered content (word, gloss, etc.), but Wiktionary mixes
-    several patterns. Heuristic: walk args from the end, skip language codes
-    ("en", "grc", "la-new"), return the first content-looking piece. This
-    yields "ephemerus" from {{bor|en|la-new|ephemerus}} and "on" from
-    {{m|grc|ἐπί||on}} -- good enough for readable etymology paragraphs.
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.chunks: list[str] = []
+        # Stack of booleans -- True means "inside a subtree we're skipping".
+        self._skip_stack: list[bool] = []
+
+    def _should_skip(self, tag: str, attrs: List[Tuple[str, Optional[str]]]) -> bool:
+        if tag in _SKIP_TAGS:
+            return True
+        attrs_d = {k: (v or "") for k, v in attrs}
+        cls = attrs_d.get("class", "")
+        # Skip footnote markers, "reference" spans, audio players, edit links.
+        if "reference" in cls or "mw-editsection" in cls or "audio" in cls:
+            return True
+        return False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _VOID_TAGS:
+            return
+        parent_skipping = any(self._skip_stack)
+        self._skip_stack.append(parent_skipping or self._should_skip(tag, attrs))
+
+    def handle_endtag(self, tag):
+        if self._skip_stack:
+            self._skip_stack.pop()
+
+    def handle_data(self, data):
+        if not any(self._skip_stack):
+            self.chunks.append(data)
+
+    def text(self) -> str:
+        return "".join(self.chunks)
+
+
+def _find_etymology_section(sections: List[Dict[str, Any]]) -> Optional[int]:
+    """Pick the first Etymology subsection (under a language heading).
+
+    `sections` comes from the MediaWiki API: each is a dict with keys
+    'line' (display text), 'toclevel' (1 = language header, 2+ = subsections),
+    'index' (section id for the next API call).
     """
-    inner = match.group(1)
-    if "=" in inner and not inner.startswith("IPA"):
-        # Named-argument templates (e.g. {{quote-book|year=...|author=...})
-        # aren't worth rendering inline.
-        return ""
-    parts = [p.strip() for p in inner.split("|")]
-    if len(parts) <= 1:
-        return ""
-    # Walk backwards for the first arg that isn't a language code and isn't
-    # empty. Empty args appear in {{m|grc|word||gloss}} where the third
-    # slot is a transliteration placeholder.
-    for p in reversed(parts[1:]):
-        if p and not _LANG_CODE_RE.match(p):
-            return p
-    return ""
-
-
-def _clean_wikitext(text: str) -> str:
-    """Rough wikitext -> plain text. Good enough for etymology paragraphs."""
-    text = _REF_RE.sub("", text)
-    # Iterate template replacement -- handles nesting (inner templates
-    # resolved first, then the outer ones that were previously blocked).
-    for _ in range(5):
-        new = _TEMPLATE_RE.sub(_extract_template, text)
-        if new == text:
-            break
-        text = new
-    text = _WIKILINK_PIPE_RE.sub(r"\1", text)
-    text = _WIKILINK_RE.sub(r"\1", text)
-    text = _HTML_TAG_RE.sub("", text)
-    # Collapse whitespace; tidy awkward spacing around punctuation.
-    text = re.sub(r"\s+([,.;:])", r"\1", text)
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    for s in sections:
+        line = (s.get("line") or "").strip()
+        level = s.get("toclevel", 0)
+        # Skip the top-level language headers themselves. Pick the first
+        # subsection whose title starts with "Etymology".
+        if level > 1 and line.lower().startswith("etymology"):
+            idx = s.get("index")
+            if idx:
+                return idx
+    return None
 
 
 def fetch_etymology(word: str, timeout: float = 3.0) -> Optional[str]:
-    """Fetch the Etymology section for `word` from Wiktionary wikitext.
+    """Fetch the Etymology section for `word` from Wiktionary as plain text.
 
-    Returns a plain-text etymology paragraph, or None if Wiktionary has no
-    entry or no etymology section. Cached per-process; safe to call repeatedly.
-    Network failures return None silently -- never blocks the UI.
+    Returns None if Wiktionary has no entry, no Etymology section, or
+    the fetch fails/times out. Cached per-process so repeat queries for
+    the same word don't hit Wiktionary twice.
     """
     w = word.strip().lower()
     with _ETYMOLOGY_CACHE_LOCK:
@@ -184,26 +201,50 @@ def fetch_etymology(word: str, timeout: float = 3.0) -> Optional[str]:
 
     result: Optional[str] = None
     try:
-        url = (
-            "https://en.wiktionary.org/w/api.php?"
-            f"action=parse&page={urllib.parse.quote(w)}"
-            "&prop=wikitext&format=json&formatversion=2"
+        # Step 1: locate the Etymology section.
+        sections_url = (
+            f"{_WIKTIONARY_API}?action=parse&page={urllib.parse.quote(w)}"
+            "&prop=sections&format=json&formatversion=2"
         )
         req = urllib.request.Request(
-            url,
+            sections_url,
             headers={"User-Agent": "Graphosaurus/1.0 (graphosaurus.com)"},
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.load(resp)
-        wikitext = data.get("parse", {}).get("wikitext", "")
-        if wikitext:
-            m = _ETY_RE.search(wikitext)
-            if m:
-                result = _clean_wikitext(m.group(1))
-                # Some pages have an empty etymology section or one that
-                # just points elsewhere. Drop if trivially short.
-                if result and len(result) < 10:
-                    result = None
+        sections = data.get("parse", {}).get("sections", [])
+        section_idx = _find_etymology_section(sections)
+        if not section_idx:
+            result = None
+        else:
+            # Step 2: fetch rendered HTML for that section. Wiktionary
+            # pre-expands all templates, so the HTML reads as clean prose.
+            text_url = (
+                f"{_WIKTIONARY_API}?action=parse&page={urllib.parse.quote(w)}"
+                f"&prop=text&section={section_idx}"
+                "&format=json&formatversion=2&disabletoc=true"
+            )
+            req = urllib.request.Request(
+                text_url,
+                headers={"User-Agent": "Graphosaurus/1.0 (graphosaurus.com)"},
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.load(resp)
+            html = data.get("parse", {}).get("text", "")
+            if html:
+                stripper = _HtmlStripper()
+                stripper.feed(html)
+                text = stripper.text()
+                # Drop the section header ("Etymology" or "Etymology 1").
+                text = re.sub(
+                    r"^\s*Etymology\s*\d*\s*\n?", "", text, count=1
+                )
+                # Collapse whitespace runs but keep paragraph breaks.
+                text = re.sub(r"[ \t]+", " ", text)
+                text = re.sub(r"\n{3,}", "\n\n", text)
+                text = text.strip()
+                if len(text) >= 10:
+                    result = text
     except Exception as e:  # noqa: BLE001
         log.info("etymology fetch failed for %r: %s", w, e)
         result = None
