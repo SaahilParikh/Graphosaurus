@@ -111,7 +111,7 @@ def neighborhood_response(
 # --- Etymology fetching (Wiktionary) ---------------------------------------
 
 _ETY_RE = re.compile(
-    r"==\s*Etymology[^=]*==\s*\n(.*?)(?=\n==|\Z)", re.DOTALL
+    r"={2,}\s*Etymology[^=]*={2,}\s*\n(.*?)(?=\n={2,}|\Z)", re.DOTALL
 )
 _TEMPLATE_RE = re.compile(r"\{\{([^{}]*(?:\{\{[^{}]*\}\}[^{}]*)*)\}\}")
 _WIKILINK_PIPE_RE = re.compile(r"\[\[[^\]|]+\|([^\]]+)\]\]")
