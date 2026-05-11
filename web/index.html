@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Thesaurus Graph</title>
+  <title>Graphosaurus</title>
   <link rel="stylesheet" href="app.css">
   <!-- Cytoscape core + fcose (force-directed) layout. From jsDelivr for
        reliability; pinned versions so rendering doesn't drift. -->
@@ -25,9 +25,35 @@
     <button id="reset" type="button">Reset</button>
     <span id="status"></span>
   </header>
-  <main id="cy"></main>
+
+  <div class="workspace">
+    <main id="cy"></main>
+    <aside id="sidebar" class="hidden" aria-label="Word details">
+      <header class="sidebar-header">
+        <h2 id="sidebar-word">—</h2>
+        <button id="sidebar-close" type="button" aria-label="Close">✕</button>
+      </header>
+
+      <section class="sidebar-section">
+        <h3>Definitions</h3>
+        <div id="sidebar-defs" class="sidebar-defs"></div>
+      </section>
+
+      <section class="sidebar-section">
+        <h3>Etymology</h3>
+        <div id="sidebar-etym" class="sidebar-etym">—</div>
+      </section>
+
+      <section class="sidebar-section">
+        <a id="sidebar-wiktionary" href="#" target="_blank" rel="noopener noreferrer">
+          View full entry on Wiktionary &rarr;
+        </a>
+      </section>
+    </aside>
+  </div>
+
   <footer>
-    <small>Click a node to expand its neighborhood. Drag to pan, scroll to zoom. Enter to search.</small>
+    <small>Click a node to see its definition + expand its neighborhood. Drag to pan, scroll to zoom.</small>
   </footer>
   <script src="app.js"></script>
 </body>

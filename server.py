@@ -16,6 +16,7 @@ Endpoints
 - GET /health                              -> 200 {"ok": true}
 - GET /api/search?q=<prefix>&limit=<N>     -> {"query": ..., "matches": [...]}
 - GET /api/neighborhood?word=<w>&depth=<k> -> {word, depth, nodes, edges}
+- GET /api/word?word=<w>                   -> {word, definitions, etymology, wiktionary_url}
 - GET /                                    -> web/index.html
 - GET /<static-asset>                      -> web/<asset>  (whitelisted)
 
@@ -25,6 +26,7 @@ Env vars
 - PG_PORT        (default: 8000)
 - PG_DICTIONARY  (default: sample_data/dictionary.txt)
 - PG_THESAURUS   (default: sample_data/thesaurus.json)
+- PG_DEFINITIONS (optional; unset -> /api/word returns empty defs)
 - PG_MAX_DEPTH   (default: 5) -- caps depth to prevent DoS via deep BFS
 - PG_LOG_LEVEL   (default: INFO)
 """
@@ -35,12 +37,15 @@ import bisect
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from threading import Lock
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from graph_builder import build_graph, normalize_inputs
 from main import _load_dictionary, _load_thesaurus
@@ -50,6 +55,13 @@ log = logging.getLogger("pythongraphs.server")
 
 # Module-level state, set once at startup. Workers read-only after that.
 _STATE: Dict[str, Any] = {}
+
+# In-process etymology cache. Lambda warm instance reuses these, so repeat
+# queries for the same word don't hit Wiktionary twice. Simple dict --
+# unbounded in theory but 150K words * ~500 bytes each = ~75MB worst case.
+# In practice only popular words get fetched; cache stays small.
+_ETYMOLOGY_CACHE: Dict[str, Optional[str]] = {}
+_ETYMOLOGY_CACHE_LOCK = Lock()
 
 # Static assets under web/ that we serve. Whitelisted to block directory
 # traversal; no "../../etc/passwd" surprises.
@@ -96,6 +108,104 @@ def neighborhood_response(
     return 200, graph
 
 
+# --- Etymology fetching (Wiktionary) ---------------------------------------
+
+_ETY_RE = re.compile(
+    r"==\s*Etymology[^=]*==\s*\n(.*?)(?=\n==|\Z)", re.DOTALL
+)
+_TEMPLATE_RE = re.compile(r"\{\{([^{}]*(?:\{\{[^{}]*\}\}[^{}]*)*)\}\}")
+_WIKILINK_PIPE_RE = re.compile(r"\[\[[^\]|]+\|([^\]]+)\]\]")
+_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+_REF_RE = re.compile(r"<ref[^>]*>.*?</ref>", re.DOTALL)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_wikitext(text: str) -> str:
+    """Rough wikitext -> plain text. Not perfect; good enough for etymology."""
+    text = _REF_RE.sub("", text)
+    # Remove templates (repeat to handle nested ones that first pass skipped)
+    for _ in range(3):
+        text = _TEMPLATE_RE.sub("", text)
+    text = _WIKILINK_PIPE_RE.sub(r"\1", text)
+    text = _WIKILINK_RE.sub(r"\1", text)
+    text = _HTML_TAG_RE.sub("", text)
+    # Collapse whitespace
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def fetch_etymology(word: str, timeout: float = 3.0) -> Optional[str]:
+    """Fetch the Etymology section for `word` from Wiktionary wikitext.
+
+    Returns a plain-text etymology paragraph, or None if Wiktionary has no
+    entry or no etymology section. Cached per-process; safe to call repeatedly.
+    Network failures return None silently -- never blocks the UI.
+    """
+    w = word.strip().lower()
+    with _ETYMOLOGY_CACHE_LOCK:
+        if w in _ETYMOLOGY_CACHE:
+            return _ETYMOLOGY_CACHE[w]
+
+    result: Optional[str] = None
+    try:
+        url = (
+            "https://en.wiktionary.org/w/api.php?"
+            f"action=parse&page={urllib.parse.quote(w)}"
+            "&prop=wikitext&format=json&formatversion=2"
+        )
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Graphosaurus/1.0 (graphosaurus.com)"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.load(resp)
+        wikitext = data.get("parse", {}).get("wikitext", "")
+        if wikitext:
+            m = _ETY_RE.search(wikitext)
+            if m:
+                result = _clean_wikitext(m.group(1))
+                # Some pages have an empty etymology section or one that
+                # just points elsewhere. Drop if trivially short.
+                if result and len(result) < 10:
+                    result = None
+    except Exception as e:  # noqa: BLE001
+        log.info("etymology fetch failed for %r: %s", w, e)
+        result = None
+
+    with _ETYMOLOGY_CACHE_LOCK:
+        _ETYMOLOGY_CACHE[w] = result
+    return result
+
+
+def word_response(
+    definitions: Dict[str, List[Dict[str, str]]],
+    dictionary: Set[str],
+    word: str,
+    *,
+    fetch_ety: bool = True,
+) -> Tuple[int, Dict[str, Any]]:
+    """Return the metadata for a single word: defs + etymology + links.
+
+    Kept as a pure function over inputs for testability. `fetch_ety` can be
+    set False in tests to avoid network calls.
+    """
+    w = (word or "").strip().lower()
+    if not w:
+        return 400, {"error": "word is required"}
+    if w not in dictionary:
+        return 404, {"error": "word not in dictionary", "word": w}
+
+    body: Dict[str, Any] = {
+        "word": w,
+        "definitions": definitions.get(w, []),
+        "wiktionary_url": f"https://en.wiktionary.org/wiki/{urllib.parse.quote(w)}",
+    }
+    if fetch_ety:
+        body["etymology"] = fetch_etymology(w)
+    return 200, body
+
+
 # --- Request handler -------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -128,6 +238,14 @@ class Handler(BaseHTTPRequestHandler):
                     word,
                     depth_raw,
                     _STATE["max_depth"],
+                )
+                return self._json(status, body)
+            if path == "/api/word":
+                word = (qs.get("word") or [""])[0]
+                status, body = word_response(
+                    _STATE["definitions"],
+                    _STATE["dictionary"],
+                    word,
                 )
                 return self._json(status, body)
             if path in ("/", "/index.html"):
@@ -178,10 +296,25 @@ def _load_state(dict_path: Path, thes_path: Path, max_depth: int) -> Dict[str, A
     raw_words = _load_dictionary(dict_path)
     raw_thes = _load_thesaurus(thes_path)
     thesaurus, dictionary = normalize_inputs(raw_thes, raw_words)
+
+    # Definitions are optional -- fall back to empty dict if the file isn't
+    # there (e.g. sample_data/ dev loop where WordNet hasn't been built).
+    defs_path_env = os.environ.get("PG_DEFINITIONS", "")
+    definitions: Dict[str, List[Dict[str, str]]] = {}
+    if defs_path_env:
+        p = Path(defs_path_env)
+        if p.exists():
+            with p.open("r", encoding="utf-8") as f:
+                definitions = json.load(f)
+            log.info("loaded %d words with definitions from %s", len(definitions), p)
+        else:
+            log.warning("PG_DEFINITIONS=%s not found; /api/word will return empty defs", p)
+
     return {
         "thesaurus": thesaurus,
         "dictionary": dictionary,
         "words_sorted": sorted(dictionary),
+        "definitions": definitions,
         "max_depth": max_depth,
     }
 
@@ -201,9 +334,10 @@ def main() -> int:
     log.info("loading thesaurus: dict=%s thesaurus=%s", dict_path, thes_path)
     _STATE.update(_load_state(dict_path, thes_path, max_depth))
     log.info(
-        "loaded %d words, %d thesaurus entries, max_depth=%d",
+        "loaded %d words, %d thesaurus entries, %d with definitions, max_depth=%d",
         len(_STATE["dictionary"]),
         len(_STATE["thesaurus"]),
+        len(_STATE["definitions"]),
         max_depth,
     )
 

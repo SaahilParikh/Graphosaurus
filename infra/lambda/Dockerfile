@@ -47,6 +47,7 @@ COPY --from=builder /build/data ./data
 # Server config: point at the WordNet-derived data.
 ENV PG_DICTIONARY=/app/data/dictionary.txt
 ENV PG_THESAURUS=/app/data/thesaurus.json
+ENV PG_DEFINITIONS=/app/data/definitions.json
 ENV PG_HOST=0.0.0.0
 ENV PG_PORT=8000
 # With ~150K words, the loaded dict is ~100 MB; BFS stays fast but cold

@@ -1,15 +1,16 @@
 """Tests for server.py pure helpers.
 
 We don't spin up the HTTP server in tests -- the Handler is thin glue over
-`search_words` and `neighborhood_response`, both of which are pure functions.
-That keeps tests fast, deterministic, and avoids port conflicts in CI.
+`search_words`, `neighborhood_response`, and `word_response`, all of which
+are pure functions. That keeps tests fast, deterministic, and avoids port
+conflicts in CI.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from server import search_words, neighborhood_response
+from server import search_words, neighborhood_response, word_response
 
 
 # --- search_words ---
@@ -132,3 +133,70 @@ def test_neighborhood_word_lowercased(tiny):
     status, body = neighborhood_response(thes, dct, "  HaPpY  ", 1)
     assert status == 200
     assert body["word"] == "happy"
+
+
+# --- word_response ---
+
+@pytest.fixture
+def sample_defs():
+    return {
+        "happy": [
+            {"pos": "adjective", "def": "enjoying or showing joy"},
+            {"pos": "adjective", "def": "marked by good fortune"},
+        ],
+        "joyful": [
+            {"pos": "adjective", "def": "full of joy"},
+        ],
+    }
+
+
+@pytest.fixture
+def sample_dict():
+    return {"happy", "joyful", "glad"}
+
+
+def test_word_returns_definitions(sample_defs, sample_dict):
+    status, body = word_response(sample_defs, sample_dict, "happy", fetch_ety=False)
+    assert status == 200
+    assert body["word"] == "happy"
+    assert len(body["definitions"]) == 2
+    assert body["definitions"][0]["pos"] == "adjective"
+    assert "joy" in body["definitions"][0]["def"]
+    # Etymology not requested in tests
+    assert "etymology" not in body
+    assert body["wiktionary_url"].endswith("/happy")
+
+
+def test_word_missing_word_is_400(sample_defs, sample_dict):
+    status, body = word_response(sample_defs, sample_dict, "", fetch_ety=False)
+    assert status == 400
+    assert "error" in body
+
+
+def test_word_not_in_dictionary_is_404(sample_defs, sample_dict):
+    status, body = word_response(sample_defs, sample_dict, "xyz", fetch_ety=False)
+    assert status == 404
+    assert body["error"]
+    assert body["word"] == "xyz"
+
+
+def test_word_no_definitions_returns_empty_list(sample_defs, sample_dict):
+    # 'glad' is in the dictionary but has no definition entry.
+    status, body = word_response(sample_defs, sample_dict, "glad", fetch_ety=False)
+    assert status == 200
+    assert body["word"] == "glad"
+    assert body["definitions"] == []
+
+
+def test_word_lowercases_and_strips(sample_defs, sample_dict):
+    status, body = word_response(sample_defs, sample_dict, "  HAPPY  ", fetch_ety=False)
+    assert status == 200
+    assert body["word"] == "happy"
+
+
+def test_word_wiktionary_url_percent_encodes_spaces(sample_defs):
+    dct = {"ice cream"}
+    defs = {"ice cream": [{"pos": "noun", "def": "frozen dessert"}]}
+    status, body = word_response(defs, dct, "ice cream", fetch_ety=False)
+    assert status == 200
+    assert body["wiktionary_url"] == "https://en.wiktionary.org/wiki/ice%20cream"

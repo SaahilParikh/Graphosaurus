@@ -70,7 +70,10 @@
     });
 
     cy.on('tap', 'node', (evt) => {
-      loadNeighborhood(evt.target.id());
+      const w = evt.target.id();
+      loadNeighborhood(w);
+      // Also populate the side panel (definitions + etymology).
+      showWordPanel(w);
     });
 
     // Search box wiring
@@ -89,7 +92,89 @@
     // Reset
     el('reset').addEventListener('click', reset);
 
+    // Side panel close
+    el('sidebar-close').addEventListener('click', hideWordPanel);
+
     setStatus('ready -- search for a word');
+  }
+
+  // --- Word panel (definitions + etymology) ---
+
+  // Small epoch counter so stale fetches (user clicked away before network
+  // returned) can't overwrite the currently-displayed word.
+  let panelEpoch = 0;
+
+  async function showWordPanel(word) {
+    const w = (word || '').trim().toLowerCase();
+    if (!w) return;
+    const epoch = ++panelEpoch;
+
+    el('sidebar-word').textContent = w;
+    el('sidebar-defs').innerHTML = '<div class="empty">Loading...</div>';
+    const etym = el('sidebar-etym');
+    etym.className = 'sidebar-etym loading';
+    etym.textContent = 'Loading...';
+    const wiktLink = el('sidebar-wiktionary');
+    wiktLink.href = `https://en.wiktionary.org/wiki/${encodeURIComponent(w)}`;
+
+    el('sidebar').classList.remove('hidden');
+
+    try {
+      const r = await fetch(`${API}/api/word?word=${encodeURIComponent(w)}`);
+      if (epoch !== panelEpoch) return;  // user moved on
+      if (!r.ok) {
+        el('sidebar-defs').innerHTML = '<div class="empty">Not in dictionary.</div>';
+        etym.className = 'sidebar-etym missing';
+        etym.textContent = '—';
+        return;
+      }
+      const data = await r.json();
+      if (epoch !== panelEpoch) return;
+      renderDefinitions(data.definitions || []);
+      renderEtymology(data.etymology);
+    } catch (err) {
+      if (epoch !== panelEpoch) return;
+      el('sidebar-defs').innerHTML = `<div class="empty">Failed: ${err.message}</div>`;
+      etym.className = 'sidebar-etym missing';
+      etym.textContent = '—';
+    }
+  }
+
+  function renderDefinitions(defs) {
+    const box = el('sidebar-defs');
+    if (!defs.length) {
+      box.innerHTML = '<div class="empty">No definitions available.</div>';
+      return;
+    }
+    const ol = document.createElement('ol');
+    for (const d of defs) {
+      const li = document.createElement('li');
+      if (d.pos) {
+        const pos = document.createElement('span');
+        pos.className = 'pos';
+        pos.textContent = d.pos;
+        li.appendChild(pos);
+      }
+      li.appendChild(document.createTextNode(d.def || ''));
+      ol.appendChild(li);
+    }
+    box.innerHTML = '';
+    box.appendChild(ol);
+  }
+
+  function renderEtymology(text) {
+    const etym = el('sidebar-etym');
+    if (text) {
+      etym.className = 'sidebar-etym';
+      etym.textContent = text;
+    } else {
+      etym.className = 'sidebar-etym missing';
+      etym.textContent = 'Etymology not available for this entry.';
+    }
+  }
+
+  function hideWordPanel() {
+    el('sidebar').classList.add('hidden');
   }
 
   // --- Search / autocomplete ---
@@ -142,6 +227,7 @@
     el('search').value = w;
     hideSuggestions();
     loadNeighborhood(w);
+    showWordPanel(w);
   }
 
   function onSearchKeydown(e) {

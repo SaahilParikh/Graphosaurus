@@ -123,6 +123,134 @@ main {
   background: #fafafa;
 }
 
+/* --- Workspace: graph + sidebar ------------------------------------- */
+
+.workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0; /* let children shrink inside flex */
+  position: relative;
+}
+
+#sidebar {
+  width: 360px;
+  max-width: 40vw;
+  background: white;
+  border-left: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  transition: margin-right 0.2s ease;
+}
+
+#sidebar.hidden {
+  /* Slide off-screen rather than display:none so transitions look clean. */
+  margin-right: calc(-1 * (360px + 40px));
+  border-left: none;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 14px 16px 8px;
+  border-bottom: 1px solid #e5e7eb;
+  background: white;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+#sidebar-word {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: #111827;
+  word-break: break-word;
+}
+
+#sidebar-close {
+  background: none;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+#sidebar-close:hover {
+  color: #111827;
+}
+
+.sidebar-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.sidebar-section:last-of-type {
+  border-bottom: none;
+}
+
+.sidebar-section h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+.sidebar-defs ol {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+  color: #111827;
+}
+
+.sidebar-defs li {
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+
+.sidebar-defs .pos {
+  color: #4f46e5;
+  font-style: italic;
+  font-size: 12px;
+  margin-right: 6px;
+}
+
+.sidebar-defs .empty {
+  color: #9ca3af;
+  font-style: italic;
+  font-size: 14px;
+}
+
+.sidebar-etym {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #111827;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.sidebar-etym.loading,
+.sidebar-etym.missing {
+  color: #9ca3af;
+  font-style: italic;
+}
+
+#sidebar-wiktionary {
+  display: inline-block;
+  font-size: 13px;
+  color: #4f46e5;
+  text-decoration: none;
+}
+
+#sidebar-wiktionary:hover {
+  text-decoration: underline;
+}
+
 footer {
   padding: 8px 14px;
   background: #ffffff;
