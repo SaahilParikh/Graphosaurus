@@ -17,9 +17,12 @@ All account-specific values (account id, hosted zone id) come from env vars
 so the code can live in a public repo without leaking infrastructure ids.
 See infra/BOOTSTRAP.md for how to set them locally and in GitHub Actions.
 
-NOTE: CloudFormation stack names are kept as PythonGraphs* for historical
-reasons. Renaming them requires delete + recreate, which takes the live
-site down and cycles the CloudFront domain. Left as-is intentionally.
+NOTE: CloudFormation stack names and some IAM resource names are kept as
+PythonGraphs* for historical reasons (project was renamed from PythonGraphs
+to Graphosaurus after initial deploy). Renaming these would require CFN
+delete + recreate, which takes the live site down and cycles the CloudFront
+domain. Left as-is intentionally -- they're internal AWS identifiers, not
+user-visible.
 """
 from __future__ import annotations
 

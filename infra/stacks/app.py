@@ -141,7 +141,7 @@ class AppStack(Stack):
         distribution = cloudfront.Distribution(
             self,
             "CDN",
-            comment=f"PythonGraphs frontend + API for {domain_name}",
+            comment=f"Graphosaurus frontend + API for {domain_name}",
             domain_names=[domain_name, f"www.{domain_name}"],
             certificate=certificate,
             default_behavior=cloudfront.BehaviorOptions(

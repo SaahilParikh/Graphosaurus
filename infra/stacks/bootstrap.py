@@ -109,7 +109,7 @@ class BootstrapStack(Stack):
                 },
                 assume_role_action="sts:AssumeRoleWithWebIdentity",
             ),
-            description=f"Assumed by GitHub Actions for {github_owner}/{github_repo} to deploy PythonGraphsApp",
+            description=f"Assumed by GitHub Actions for {github_owner}/{github_repo} to deploy Graphosaurus app stack",
         )
 
         # CDK v2 uses a set of assume-able roles created by `cdk bootstrap`

@@ -1,6 +1,13 @@
 # Infrastructure
 
-Two CDK stacks define the public deployment of this project.
+Two CDK stacks define the public deployment of Graphosaurus.
+
+> **Naming note:** the CloudFormation stack names and some IAM resource
+> names are kept as `PythonGraphs*` for historical reasons (the project
+> was renamed from PythonGraphs to Graphosaurus after the initial deploy).
+> Renaming them in CloudFormation would mean a brief outage while resources
+> are recreated. Left as-is intentionally; they're internal AWS identifiers,
+> not user-visible.
 
 ## `PythonGraphsBootstrap`
 
@@ -22,11 +29,12 @@ See **[BOOTSTRAP.md](./BOOTSTRAP.md)** for the exact commands.
 Deployed automatically on every push to `main` via
 `.github/workflows/deploy.yml`. Produces the runtime:
 
-- A Lambda function running our existing `server.py` inside a container
-  image (Lambda Web Adapter layer translates Lambda events to HTTP)
-- A Function URL on that Lambda
-- A CloudFront distribution in front of it, with our ACM cert
-- `A` + `AAAA` alias records for `parikhsaahil.com` and `www.*`
+- A Lambda function running `server.py` inside a container image (Lambda
+  Web Adapter layer translates Lambda events to HTTP)
+- A Function URL on that Lambda (IAM auth)
+- A CloudFront distribution in front, with OAC signing origin requests and
+  our ACM cert
+- `A` + `AAAA` alias records for the apex and `www`
 
 The two stacks hand off via SSM parameters under `/pythongraphs/*`.
 
@@ -67,10 +75,10 @@ frontend aggressively, so most visitors never hit a cold Lambda.
 
 ## Why two stacks, not one
 
-Blast-radius isolation. The CI role is scoped so it can only update
-`PythonGraphsApp` -- it has no permission to delete the hosted zone,
-the cert, or itself. A compromised GitHub token can take down the site
-for ~5 minutes (bad deploy) but can't permanently hijack DNS or cert.
+Blast-radius isolation. The CI role is scoped so it can only update the
+app stack -- it has no permission to delete the hosted zone, the cert, or
+itself. A compromised GitHub token can take down the site for ~5 minutes
+(bad deploy) but can't permanently hijack DNS or cert.
 
 ## Cost estimate (ballpark)
 

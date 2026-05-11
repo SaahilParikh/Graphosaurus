@@ -119,6 +119,10 @@ on every push to `main` via GitHub Actions. Two CDK stacks in
 - `PythonGraphsApp` (deployed by CI) — Lambda container + CloudFront +
   Route53 aliases
 
+Stack names are kept as `PythonGraphs*` for historical reasons (the project
+was renamed to Graphosaurus after initial deploy; CFN rename = outage, so
+internal AWS identifiers stay as they are).
+
 See [`infra/BOOTSTRAP.md`](./infra/BOOTSTRAP.md) for the one-time setup.
 See [`infra/README.md`](./infra/README.md) for the architecture.
 
