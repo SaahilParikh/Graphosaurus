@@ -39,9 +39,15 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     env:
-      # These match stacks/bootstrap.py:BootstrapStack ci_role.
+      # Account-specific values come from repository secrets so the repo
+      # doesn't leak the account id. Set these in GitHub:
+      #   AWS_ACCOUNT_ID       -- the AWS account id
+      #   HOSTED_ZONE_ID       -- Route53 zone id for the site domain
+      # See infra/BOOTSTRAP.md for setup.
       AWS_REGION: us-east-1
-      AWS_ROLE_ARN: arn:aws:iam::***AWS_ACCOUNT_ID***:role/PythonGraphsGithubDeployRole
+      AWS_ROLE_ARN: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/PythonGraphsGithubDeployRole
+      CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
+      PG_HOSTED_ZONE_ID: ${{ secrets.HOSTED_ZONE_ID }}
     steps:
       - uses: actions/checkout@v4
 

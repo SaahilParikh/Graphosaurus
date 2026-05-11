@@ -12,7 +12,8 @@ identity resources:
 - Reference to the existing Route53 hosted zone (imported, not created --
   Route53 Registrar auto-creates this on domain registration)
 - GitHub OIDC provider reference + `PythonGraphsGithubDeployRole` (trust
-  scoped to `SaahilParikh/PythonGraphs@main`)
+  scoped to `<GITHUB_OWNER>/<GITHUB_REPO>@main`, configured in
+  `infra/app.py`)
 
 See **[BOOTSTRAP.md](./BOOTSTRAP.md)** for the exact commands.
 

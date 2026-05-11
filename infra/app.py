@@ -12,6 +12,14 @@
 Keeping them separate means CI only needs permissions for the app stack --
 which cannot escalate into the bootstrap resources (zone, OIDC provider,
 CI role itself).
+
+All account-specific values (account id, hosted zone id) come from env vars
+so the code can live in a public repo without leaking infrastructure ids.
+See infra/BOOTSTRAP.md for how to set them locally and in GitHub Actions.
+
+NOTE: CloudFormation stack names are kept as PythonGraphs* for historical
+reasons. Renaming them requires delete + recreate, which takes the live
+site down and cycles the CloudFront domain. Left as-is intentionally.
 """
 from __future__ import annotations
 
@@ -23,22 +31,31 @@ from stacks.bootstrap import BootstrapStack
 from stacks.app import AppStack
 
 
-# Single source of truth for these config values. If you fork the project,
-# change these (and the account ID) and everything else follows.
+# Public-ish config: the domain and the GitHub repo identity. These are
+# already visible in live DNS / in the repo URL, so no point "hiding" them.
 DOMAIN_NAME = "graphosaurus.com"
-# The existing hosted zone id. Route53 Registrar auto-creates this when a
-# domain is registered through Amazon. We import it instead of creating a
-# new one to avoid duplicates (and to reuse the NS records the registrar
-# already wired up at the domain).
-HOSTED_ZONE_ID = "***HOSTED_ZONE_ID***"
 GITHUB_OWNER = "SaahilParikh"
-GITHUB_REPO = "PythonGraphs"
+GITHUB_REPO = "Graphosaurus"
 
-# Personal AWS account. Region is us-east-1 because CloudFront viewer certs
-# must be in us-east-1, so putting both stacks there avoids cross-region
-# coordination.
-AWS_ACCOUNT = os.environ.get("CDK_DEFAULT_ACCOUNT", "***AWS_ACCOUNT_ID***")
+
+def _require(name: str) -> str:
+    """Fail fast with a clear message if a required env var is missing."""
+    v = os.environ.get(name)
+    if not v:
+        raise SystemExit(
+            f"error: environment variable {name} is required. "
+            "See infra/BOOTSTRAP.md."
+        )
+    return v
+
+
+# Account-specific. Kept out of source so the repo doesn't leak them.
+#   CDK_DEFAULT_ACCOUNT   -- AWS account id the stacks deploy into
+#   PG_HOSTED_ZONE_ID     -- Route53 zone id for DOMAIN_NAME (pre-existing;
+#                            we import it, not create it)
+AWS_ACCOUNT = _require("CDK_DEFAULT_ACCOUNT")
 AWS_REGION = os.environ.get("CDK_DEFAULT_REGION", "us-east-1")
+HOSTED_ZONE_ID = _require("PG_HOSTED_ZONE_ID")
 
 env = Environment(account=AWS_ACCOUNT, region=AWS_REGION)
 
