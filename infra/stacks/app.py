@@ -104,8 +104,6 @@ class AppStack(Stack):
             # BFS at depth 5 on real data is still well under a second,
             # but network init + Lambda cold bootstrap can eat time.
             timeout=Duration.seconds(30),
-            # Tight env wiring: the image already has sensible defaults but
-            # surfacing them here documents what the runtime cares about.
             environment={
                 "PG_LOG_LEVEL": "INFO",
                 "PG_MAX_DEPTH": "5",
@@ -113,18 +111,32 @@ class AppStack(Stack):
             description=f"Thesaurus graph server for {domain_name}",
         )
 
-        # Function URL: the simplest way to expose a Lambda over HTTP.
-        # No API Gateway, no usage plans, no extra dollars/hour. Public
-        # (auth NONE) because the graph data is public anyway.
+        # Function URL with IAM auth. We tried AuthType=NONE first; this
+        # account's AWS Organization has an SCP that denies public Lambda
+        # URLs (AuthType=NONE), so we use IAM auth and route through
+        # CloudFront, which signs requests via Origin Access Control. This
+        # is the more secure pattern anyway -- only CloudFront can invoke
+        # Lambda, not random internet clients hitting the raw URL.
         fn_url = fn.add_function_url(
-            auth_type=_lambda.FunctionUrlAuthType.NONE,
+            auth_type=_lambda.FunctionUrlAuthType.AWS_IAM,
             invoke_mode=_lambda.InvokeMode.BUFFERED,
+        )
+
+        # --- CloudFront Origin Access Control ----------------------------
+        # OAC lets CloudFront sign origin requests with SigV4. Unlike OAI
+        # (S3-only, legacy), OAC works for Lambda function URL origins.
+        lambda_oac = cloudfront.FunctionUrlOriginAccessControl(
+            self,
+            "LambdaOAC",
+            signing=cloudfront.Signing.sigv4_always(),
         )
 
         # --- CloudFront ---------------------------------------------------
         # The Function URL isn't enough by itself: it doesn't do custom
         # domains or edge caching. CloudFront adds both. Also absorbs a lot
-        # of cheap traffic that never hits Lambda.
+        # of cheap traffic that never hits Lambda. With OAC, CloudFront
+        # signs origin requests so Lambda only accepts traffic from this
+        # distribution.
         distribution = cloudfront.Distribution(
             self,
             "CDN",
@@ -132,33 +144,50 @@ class AppStack(Stack):
             domain_names=[domain_name, f"www.{domain_name}"],
             certificate=certificate,
             default_behavior=cloudfront.BehaviorOptions(
-                # Custom origin -> the Function URL.
-                origin=origins.FunctionUrlOrigin(fn_url),
+                origin=origins.FunctionUrlOrigin.with_origin_access_control(
+                    fn_url,
+                    origin_access_control=lambda_oac,
+                ),
                 viewer_protocol_policy=cloudfront
                     .ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                 # Default: let CloudFront pick sensible caching for the
                 # static HTML/JS/CSS responses.
                 cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
                 allowed_methods=cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+                # Required for OAC signing: the origin request policy must
+                # exclude the Host header (CloudFront must sign with its
+                # own host, not the viewer's).
+                origin_request_policy=cloudfront
+                    .OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
             ),
             additional_behaviors={
                 # API calls are dynamic (depth param, autocomplete). Don't
                 # cache them -- a shared cache would leak one user's depth
                 # choice to another. Forward everything to Lambda every time.
                 "/api/*": cloudfront.BehaviorOptions(
-                    origin=origins.FunctionUrlOrigin(fn_url),
+                    origin=origins.FunctionUrlOrigin.with_origin_access_control(
+                        fn_url,
+                        origin_access_control=lambda_oac,
+                    ),
                     viewer_protocol_policy=cloudfront
                         .ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                     cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
                     allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
+                    origin_request_policy=cloudfront
+                        .OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
                 ),
                 # /health is dynamic (could be used by uptime checks) but
                 # cheap to call. Don't cache.
                 "/health": cloudfront.BehaviorOptions(
-                    origin=origins.FunctionUrlOrigin(fn_url),
+                    origin=origins.FunctionUrlOrigin.with_origin_access_control(
+                        fn_url,
+                        origin_access_control=lambda_oac,
+                    ),
                     viewer_protocol_policy=cloudfront
                         .ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                     cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                    origin_request_policy=cloudfront
+                        .OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
                 ),
             },
             # IPv4 + IPv6. AAAA record below assumes this is enabled.
