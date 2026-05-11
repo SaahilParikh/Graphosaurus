@@ -7,12 +7,12 @@ Two CDK stacks define the public deployment of this project.
 Run **once**, by a human with admin credentials. Creates the persistent /
 identity resources:
 
-- Route53 public hosted zone for `parikhsaahil.com`
-- ACM certificate (DNS-validated via the zone) for the apex + www
-- GitHub OIDC provider + `PythonGraphsGithubDeployRole` (trust scoped to
-  `SaahilParikh/PythonGraphs@main`)
-- An automated `route53domains:UpdateDomainNameservers` call that flips
-  the registrar's NS records to point at the zone
+- ACM certificate (DNS-validated via the existing Route53 zone) for the
+  apex + www
+- Reference to the existing Route53 hosted zone (imported, not created --
+  Route53 Registrar auto-creates this on domain registration)
+- GitHub OIDC provider reference + `PythonGraphsGithubDeployRole` (trust
+  scoped to `SaahilParikh/PythonGraphs@main`)
 
 See **[BOOTSTRAP.md](./BOOTSTRAP.md)** for the exact commands.
 
