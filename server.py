@@ -231,10 +231,13 @@ def _slice_etymology_html(html: str) -> Optional[str]:
     after_heading = close_re.search(html, m.start())
     content_start = after_heading.end() if after_heading else m.end()
 
-    # Terminate at the next heading of same-or-higher level (h2, h3... up to
-    # and including `level`).
-    levels_pat = "".join(str(i) for i in range(2, level + 1))
-    end_re = re.compile(rf"<h[{levels_pat}]\b", re.IGNORECASE)
+    # Terminate at the next heading of ANY level. Wiktionary structures
+    # pages like "internet" with <h4>Pronunciation</h4> nested INSIDE the
+    # etymology h3 section -- MediaWiki treats h4 as a subsection of h3,
+    # so technically that's part of the Etymology section, but we don't
+    # want that content. Stopping at any heading gives us just the
+    # etymology prose that sits directly under the heading.
+    end_re = re.compile(r"<h[2-6]\b", re.IGNORECASE)
     end_match = end_re.search(html, content_start)
     end = end_match.start() if end_match else len(html)
 
