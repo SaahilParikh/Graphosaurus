@@ -113,23 +113,58 @@ def neighborhood_response(
 _ETY_RE = re.compile(
     r"={2,}\s*Etymology[^=]*={2,}\s*\n(.*?)(?=\n={2,}|\Z)", re.DOTALL
 )
-_TEMPLATE_RE = re.compile(r"\{\{([^{}]*(?:\{\{[^{}]*\}\}[^{}]*)*)\}\}")
+# Simple templates without nesting. We handle nested templates by iterating.
+_TEMPLATE_RE = re.compile(r"\{\{([^{}]*)\}\}")
 _WIKILINK_PIPE_RE = re.compile(r"\[\[[^\]|]+\|([^\]]+)\]\]")
 _WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _REF_RE = re.compile(r"<ref[^>]*>.*?</ref>", re.DOTALL)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+# ISO-like language code: 2-4 lowercase letters, optional suffix (e.g. la-new).
+_LANG_CODE_RE = re.compile(r"^[a-z]{2,4}(?:-[a-z0-9]+)*$")
+
+
+def _extract_template(match: re.Match) -> str:
+    """Replace a Wiktionary template with its most useful piece.
+
+    Templates look like {{name|arg1|arg2|...}}. The conventional last-arg is
+    usually the rendered content (word, gloss, etc.), but Wiktionary mixes
+    several patterns. Heuristic: walk args from the end, skip language codes
+    ("en", "grc", "la-new"), return the first content-looking piece. This
+    yields "ephemerus" from {{bor|en|la-new|ephemerus}} and "on" from
+    {{m|grc|ἐπί||on}} -- good enough for readable etymology paragraphs.
+    """
+    inner = match.group(1)
+    if "=" in inner and not inner.startswith("IPA"):
+        # Named-argument templates (e.g. {{quote-book|year=...|author=...})
+        # aren't worth rendering inline.
+        return ""
+    parts = [p.strip() for p in inner.split("|")]
+    if len(parts) <= 1:
+        return ""
+    # Walk backwards for the first arg that isn't a language code and isn't
+    # empty. Empty args appear in {{m|grc|word||gloss}} where the third
+    # slot is a transliteration placeholder.
+    for p in reversed(parts[1:]):
+        if p and not _LANG_CODE_RE.match(p):
+            return p
+    return ""
 
 
 def _clean_wikitext(text: str) -> str:
-    """Rough wikitext -> plain text. Not perfect; good enough for etymology."""
+    """Rough wikitext -> plain text. Good enough for etymology paragraphs."""
     text = _REF_RE.sub("", text)
-    # Remove templates (repeat to handle nested ones that first pass skipped)
-    for _ in range(3):
-        text = _TEMPLATE_RE.sub("", text)
+    # Iterate template replacement -- handles nesting (inner templates
+    # resolved first, then the outer ones that were previously blocked).
+    for _ in range(5):
+        new = _TEMPLATE_RE.sub(_extract_template, text)
+        if new == text:
+            break
+        text = new
     text = _WIKILINK_PIPE_RE.sub(r"\1", text)
     text = _WIKILINK_RE.sub(r"\1", text)
     text = _HTML_TAG_RE.sub("", text)
-    # Collapse whitespace
+    # Collapse whitespace; tidy awkward spacing around punctuation.
+    text = re.sub(r"\s+([,.;:])", r"\1", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
