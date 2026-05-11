@@ -24,6 +24,7 @@ from aws_cdk import (
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
     aws_ecr_assets as ecr_assets,
+    aws_iam as iam,
     aws_lambda as _lambda,
     aws_route53 as route53,
     aws_route53_targets as targets,
@@ -198,8 +199,26 @@ class AppStack(Stack):
             http_version=cloudfront.HttpVersion.HTTP2_AND_3,
         )
 
+        # --- CloudFront-to-Lambda permission for OAC ---------------------
+        # CDK's FunctionUrlOrigin.with_origin_access_control automatically
+        # adds a Lambda:InvokeFunctionUrl permission per origin. BUT per AWS
+        # docs (see ./private-content-restricting-access-to-lambda.html) a
+        # second permission -- Lambda:InvokeFunction -- is also required.
+        # Without it, CloudFront's signed requests get "Forbidden. For
+        # troubleshooting Function URL authorization issues..." despite
+        # every other config being correct. CDK does not add this permission
+        # automatically (as of 2.170), so we add it ourselves.
+        fn.add_permission(
+            "AllowCloudFrontInvokeFunction",
+            principal=iam.ServicePrincipal("cloudfront.amazonaws.com"),
+            action="lambda:InvokeFunction",
+            source_arn=(
+                f"arn:aws:cloudfront::{self.account}:distribution/"
+                f"{distribution.distribution_id}"
+            ),
+        )
+
         # --- DNS aliases --------------------------------------------------
-        # Apex A/AAAA for parikhsaahil.com
         route53.ARecord(
             self,
             "ApexA",
