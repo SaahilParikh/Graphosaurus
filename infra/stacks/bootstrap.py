@@ -30,9 +30,9 @@ from constructs import Construct
 
 # SSM parameter names are the stable contract between the two stacks.
 # Changing these requires a coordinated bootstrap + app redeploy.
-SSM_ZONE_ID = "/pythongraphs/route53/zone-id"
-SSM_CERT_ARN = "/pythongraphs/acm/certificate-arn"
-SSM_CI_ROLE_ARN = "/pythongraphs/iam/ci-role-arn"
+SSM_ZONE_ID = "/graphosaurus/route53/zone-id"
+SSM_CERT_ARN = "/graphosaurus/acm/certificate-arn"
+SSM_CI_ROLE_ARN = "/graphosaurus/iam/ci-role-arn"
 
 
 class BootstrapStack(Stack):
@@ -95,7 +95,7 @@ class BootstrapStack(Stack):
         ci_role = iam.Role(
             self,
             "GithubDeployRole",
-            role_name="PythonGraphsGithubDeployRole",
+            role_name="GraphosaurusGithubDeployRole",
             assumed_by=iam.FederatedPrincipal(
                 github_oidc.open_id_connect_provider_arn,
                 conditions={
@@ -128,7 +128,7 @@ class BootstrapStack(Stack):
             iam.PolicyStatement(
                 actions=["ssm:GetParameter", "ssm:GetParameters"],
                 resources=[
-                    f"arn:aws:ssm:{self.region}:{self.account}:parameter/pythongraphs/*",
+                    f"arn:aws:ssm:{self.region}:{self.account}:parameter/graphosaurus/*",
                 ],
             )
         )

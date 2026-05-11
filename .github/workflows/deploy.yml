@@ -45,7 +45,7 @@ jobs:
       #   HOSTED_ZONE_ID       -- Route53 zone id for the site domain
       # See infra/BOOTSTRAP.md for setup.
       AWS_REGION: us-east-1
-      AWS_ROLE_ARN: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/PythonGraphsGithubDeployRole
+      AWS_ROLE_ARN: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GraphosaurusGithubDeployRole
       CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
       PG_HOSTED_ZONE_ID: ${{ secrets.HOSTED_ZONE_ID }}
     steps:
@@ -78,9 +78,9 @@ jobs:
 
       # docker is already running on ubuntu-latest. CDK uses it to build
       # the Lambda container image declared in infra/lambda/Dockerfile.
-      - name: cdk deploy PythonGraphsApp
+      - name: cdk deploy GraphosaurusApp
         working-directory: infra
-        run: cdk deploy PythonGraphsApp --require-approval never --outputs-file ../cdk-outputs.json
+        run: cdk deploy GraphosaurusApp --require-approval never --outputs-file ../cdk-outputs.json
 
       - name: Print outputs
         if: always()

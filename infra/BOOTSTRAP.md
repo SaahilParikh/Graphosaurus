@@ -13,14 +13,14 @@ None are hardcoded in the repo.
 
 ## What the bootstrap creates
 
-`cdk deploy PythonGraphsBootstrap` creates:
+`cdk deploy GraphosaurusBootstrap` creates:
 
 - ACM certificate for the domain + `www.` subdomain, DNS-validated through
   the (already-existing) Route53 zone. Validation usually completes in
   1-2 minutes.
 - GitHub OIDC identity provider reference (imports the one in your account;
   create one manually if missing -- see troubleshooting below).
-- IAM role `PythonGraphsGithubDeployRole` that GitHub Actions assumes. It
+- IAM role `GraphosaurusGithubDeployRole` that GitHub Actions assumes. It
   is scoped to `<GITHUB_OWNER>/<GITHUB_REPO>` on `main` only (values set
   in `infra/app.py`).
 - Three SSM parameters (`/pythongraphs/route53/zone-id`,
@@ -102,7 +102,7 @@ roles). Safe to re-run.
 
 ```
 cd infra
-cdk deploy PythonGraphsBootstrap
+cdk deploy GraphosaurusBootstrap
 ```
 
 Expected duration: ~1-2 minutes.
@@ -132,10 +132,10 @@ gh secret set HOSTED_ZONE_ID --body '<Z...>'
 From then on, `git push origin main` triggers
 `.github/workflows/deploy.yml` which:
 
-1. Assumes `PythonGraphsGithubDeployRole` via GitHub OIDC (no stored AWS
+1. Assumes `GraphosaurusGithubDeployRole` via GitHub OIDC (no stored AWS
    credentials in GitHub).
 2. Runs `pytest` over the whole project.
-3. Runs `cdk deploy PythonGraphsApp` -- builds the Lambda image, pushes to
+3. Runs `cdk deploy GraphosaurusApp` -- builds the Lambda image, pushes to
    ECR, updates CloudFront + Lambda + Route53 aliases.
 
 First app-stack deploy: ~5 minutes. Subsequent deploys: 1-3 minutes.
@@ -151,7 +151,7 @@ First app-stack deploy: ~5 minutes. Subsequent deploys: 1-3 minutes.
     --client-id-list sts.amazonaws.com \
     --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
   ```
-  Then re-run `cdk deploy PythonGraphsBootstrap`.
+  Then re-run `cdk deploy GraphosaurusBootstrap`.
 - **Lambda + CloudFront OAC 403.** If you see "Forbidden. For
   troubleshooting Function URL authorization issues..." the Lambda needs
   BOTH `lambda:InvokeFunctionUrl` AND `lambda:InvokeFunction` granted to
@@ -162,7 +162,7 @@ First app-stack deploy: ~5 minutes. Subsequent deploys: 1-3 minutes.
 - **GitHub repo rename.** The OIDC trust policy scopes to
   `repo:<owner>/<repo>:ref:refs/heads/main`. If you rename the repo on
   GitHub, update `GITHUB_REPO` in `infra/app.py` and redeploy
-  `PythonGraphsBootstrap`, otherwise CI role assumption will fail.
+  `GraphosaurusBootstrap`, otherwise CI role assumption will fail.
 - **AWS Organizations SCPs.** If deploying into an org account, check for
   SCPs that block public Lambda URLs (`AuthType=NONE`). We use
   `AuthType=AWS_IAM` + CloudFront OAC to sidestep this; works even with
@@ -172,8 +172,8 @@ First app-stack deploy: ~5 minutes. Subsequent deploys: 1-3 minutes.
 
 ```
 cd infra
-cdk destroy PythonGraphsApp
-cdk destroy PythonGraphsBootstrap
+cdk destroy GraphosaurusApp
+cdk destroy GraphosaurusBootstrap
 ```
 
 The Route53 hosted zone is imported (not created), so it stays intact. The

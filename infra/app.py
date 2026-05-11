@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """CDK app entry. Two stacks:
 
-- PythonGraphsBootstrap: run ONCE locally by a human with admin creds.
+- GraphosaurusBootstrap: run ONCE locally by a human with admin creds.
     Imports the existing Route53 zone, creates ACM cert, GitHub OIDC trust,
     and CI role. Re-running is idempotent but unnecessary.
 
-- PythonGraphsApp: deployed by CI on every push to main. Creates the
+- GraphosaurusApp: deployed by CI on every push to main. Creates the
     Lambda, Function URL, CloudFront distribution, and alias records.
     Looks up the zone + cert that Bootstrap created via SSM parameters.
 
@@ -17,12 +17,8 @@ All account-specific values (account id, hosted zone id) come from env vars
 so the code can live in a public repo without leaking infrastructure ids.
 See infra/BOOTSTRAP.md for how to set them locally and in GitHub Actions.
 
-NOTE: CloudFormation stack names and some IAM resource names are kept as
-PythonGraphs* for historical reasons (project was renamed from PythonGraphs
-to Graphosaurus after initial deploy). Renaming these would require CFN
-delete + recreate, which takes the live site down and cycles the CloudFront
-domain. Left as-is intentionally -- they're internal AWS identifiers, not
-user-visible.
+All AWS resource names (stack names, IAM role, SSM parameter paths) use the
+Graphosaurus prefix consistently.
 """
 from __future__ import annotations
 
@@ -66,7 +62,7 @@ app = App()
 
 BootstrapStack(
     app,
-    "PythonGraphsBootstrap",
+    "GraphosaurusBootstrap",
     env=env,
     domain_name=DOMAIN_NAME,
     hosted_zone_id=HOSTED_ZONE_ID,
@@ -76,7 +72,7 @@ BootstrapStack(
 
 AppStack(
     app,
-    "PythonGraphsApp",
+    "GraphosaurusApp",
     env=env,
     domain_name=DOMAIN_NAME,
 )

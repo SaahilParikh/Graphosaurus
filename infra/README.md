@@ -2,14 +2,7 @@
 
 Two CDK stacks define the public deployment of Graphosaurus.
 
-> **Naming note:** the CloudFormation stack names and some IAM resource
-> names are kept as `PythonGraphs*` for historical reasons (the project
-> was renamed from PythonGraphs to Graphosaurus after the initial deploy).
-> Renaming them in CloudFormation would mean a brief outage while resources
-> are recreated. Left as-is intentionally; they're internal AWS identifiers,
-> not user-visible.
-
-## `PythonGraphsBootstrap`
+## `GraphosaurusBootstrap`
 
 Run **once**, by a human with admin credentials. Creates the persistent /
 identity resources:
@@ -18,13 +11,13 @@ identity resources:
   apex + www
 - Reference to the existing Route53 hosted zone (imported, not created --
   Route53 Registrar auto-creates this on domain registration)
-- GitHub OIDC provider reference + `PythonGraphsGithubDeployRole` (trust
+- GitHub OIDC provider reference + `GraphosaurusGithubDeployRole` (trust
   scoped to `<GITHUB_OWNER>/<GITHUB_REPO>@main`, configured in
   `infra/app.py`)
 
 See **[BOOTSTRAP.md](./BOOTSTRAP.md)** for the exact commands.
 
-## `PythonGraphsApp`
+## `GraphosaurusApp`
 
 Deployed automatically on every push to `main` via
 `.github/workflows/deploy.yml`. Produces the runtime:
@@ -51,8 +44,8 @@ infra/
 │   └── Dockerfile         # Lambda container image (server.py + adapter)
 └── stacks/
     ├── __init__.py
-    ├── bootstrap.py       # PythonGraphsBootstrap stack
-    └── app.py             # PythonGraphsApp stack
+    ├── bootstrap.py       # GraphosaurusBootstrap stack
+    └── app.py             # GraphosaurusApp stack
 ```
 
 ## Why container Lambda instead of zip

@@ -1,3 +1,5 @@
 # Runtime has zero external deps (stdlib only).
-# Dev/test only:
+# Dev/test:
 pytest>=7.0
+# For regenerating the wordbank locally (CI + Dockerfile do this on their own).
+nltk>=3.8
