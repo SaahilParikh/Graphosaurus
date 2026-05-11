@@ -1,0 +1,4 @@
+# CDK v2 pinned. Any recent 2.x works; pinning reduces drift between
+# local `cdk synth` and the GitHub Actions runner.
+aws-cdk-lib==2.170.0
+constructs>=10.0.0,<11.0.0

@@ -1,0 +1,81 @@
+name: deploy
+
+# Triggered on push to main. PRs don't deploy (no trust boundary to share
+# the AWS role with forks). Manual re-run via the Actions UI still works.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# OIDC needs id-token:write. contents:read for checkout. Nothing else.
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  # One deploy at a time per branch. Newer pushes wait, don't replace.
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: pip install pytest==8.4.2
+
+      - name: Run tests
+        run: python3 -m pytest -q
+
+  deploy:
+    name: cdk deploy
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      # These match stacks/bootstrap.py:BootstrapStack ci_role.
+      AWS_REGION: us-east-1
+      AWS_ROLE_ARN: arn:aws:iam::***AWS_ACCOUNT_ID_LEGACY***:role/PythonGraphsGithubDeployRole
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install CDK
+        run: npm install -g aws-cdk@2.170.0
+
+      - name: Install CDK app deps
+        run: pip install -r infra/requirements.txt
+        working-directory: .
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-session-name: github-actions-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify credentials
+        run: aws sts get-caller-identity
+
+      # docker is already running on ubuntu-latest. CDK uses it to build
+      # the Lambda container image declared in infra/lambda/Dockerfile.
+      - name: cdk deploy PythonGraphsApp
+        working-directory: infra
+        run: cdk deploy PythonGraphsApp --require-approval never --outputs-file ../cdk-outputs.json
+
+      - name: Print outputs
+        if: always()
+        run: cat cdk-outputs.json || echo "(no outputs file)"

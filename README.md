@@ -108,6 +108,19 @@ pip install pytest
 pytest -q
 ```
 
+## Deployment
+
+Deployed automatically to **[parikhsaahil.com](https://parikhsaahil.com)**
+on every push to `main` via GitHub Actions. Two CDK stacks in
+[`infra/`](./infra/):
+
+- `PythonGraphsBootstrap` (run once) — Route53 zone, ACM cert, GitHub OIDC
+- `PythonGraphsApp` (deployed by CI) — Lambda container + CloudFront +
+  Route53 aliases
+
+See [`infra/BOOTSTRAP.md`](./infra/BOOTSTRAP.md) for the one-time setup.
+See [`infra/README.md`](./infra/README.md) for the architecture.
+
 ## Parallelism rationale
 
 Building one ego graph is fully independent of building another — no shared

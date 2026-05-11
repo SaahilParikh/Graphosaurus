@@ -1,69 +1,92 @@
-# Infrastructure (planned)
+# Infrastructure
 
-This directory is a placeholder for the deployment IaC. The application code
-is written to be deployable today; the IaC to actually deploy it will land
-here when we're ready to publish.
+Two CDK stacks define the public deployment of this project.
 
-## Deployment phases
+## `PythonGraphsBootstrap`
 
-### Phase 1 — local Docker (current)
+Run **once**, by a human with admin credentials. Creates the persistent /
+identity resources:
 
-`./run.sh serve` runs the whole stack on `http://localhost:8000` via Docker.
-No AWS involved. The server is 12-factor-compliant — config via env vars,
-stateless, logs to stdout, `/health` endpoint — so moving it to any runtime
-is a config change, not a code change.
+- Route53 public hosted zone for `parikhsaahil.com`
+- ACM certificate (DNS-validated via the zone) for the apex + www
+- GitHub OIDC provider + `PythonGraphsGithubDeployRole` (trust scoped to
+  `SaahilParikh/PythonGraphs@main`)
+- An automated `route53domains:UpdateDomainNameservers` call that flips
+  the registrar's NS records to point at the zone
 
-### Phase 2 — static pre-generated graphs on S3 + CloudFront
+See **[BOOTSTRAP.md](./BOOTSTRAP.md)** for the exact commands.
 
-Cheapest path to public hosting. On deploy, run `main.py` on real data
-(WordNet), upload `out/*.json` to an S3 bucket, serve the `web/` frontend
-from the same or a sibling bucket behind CloudFront. No always-on compute.
+## `PythonGraphsApp`
 
-Tradeoff: depth is fixed at generation time. Good enough if we pick one
-sensible default (likely depth=2).
+Deployed automatically on every push to `main` via
+`.github/workflows/deploy.yml`. Produces the runtime:
 
-```
-  Users
-    |
-    v
-  CloudFront
-    |     \
-    |      \
-    v       v
-  S3 (web/)  S3 (graphs/{word}.json)
-```
+- A Lambda function running our existing `server.py` inside a container
+  image (Lambda Web Adapter layer translates Lambda events to HTTP)
+- A Function URL on that Lambda
+- A CloudFront distribution in front of it, with our ACM cert
+- `A` + `AAAA` alias records for `parikhsaahil.com` and `www.*`
 
-Regeneration = one CI job: run the pipeline, sync to S3, invalidate the
-relevant CloudFront paths.
+The two stacks hand off via SSM parameters under `/pythongraphs/*`.
 
-### Phase 3 — dynamic API on Lambda (optional)
-
-If the depth slider is important in production (not just dev), we keep the
-Python server but run it serverless. API Gateway in front of a Lambda that
-bundles the thesaurus. The static frontend is still Phase-2-style on S3/CF.
+## Layout
 
 ```
-  Users -> CloudFront -> S3 (web/)
-                      -> API Gateway -> Lambda (server.py) -> [thesaurus in bundle]
+infra/
+├── app.py                 # CDK app entry: instantiates both stacks
+├── cdk.json               # CDK config, feature flags
+├── requirements.txt       # Pinned CDK deps
+├── BOOTSTRAP.md           # Step-by-step one-time setup
+├── README.md              # (this file)
+├── lambda/
+│   └── Dockerfile         # Lambda container image (server.py + adapter)
+└── stacks/
+    ├── __init__.py
+    ├── bootstrap.py       # PythonGraphsBootstrap stack
+    └── app.py             # PythonGraphsApp stack
 ```
 
-Lambda cold start is the main concern; thesaurus up to ~500MB fits in a
-Lambda package or comes from S3 at init time.
+## Why container Lambda instead of zip
 
-## Tooling choice
+Python code + deps would fit in the 250 MB unzipped Lambda limit, but the
+container path has three advantages for this project:
 
-AWS CDK (Python) when we get there. Keeps language consistent with the app,
-has good ergonomics for stacks like S3 + CloudFront + Lambda + API GW.
-Deploy target: personal Isengard account.
+1. We get to reuse our existing dev `Dockerfile` layout with minimal
+   changes (`infra/lambda/Dockerfile` adds only the Web Adapter copy).
+2. `server.py` runs **unchanged** -- no `mangum`, no rewrite to a handler
+   function. The Web Adapter forwards Lambda events to whatever HTTP
+   server you're running on `$PORT`. One code path for local, Docker, and
+   Lambda.
+3. CDK's `DockerImageAsset` handles the ECR lifecycle for us: builds,
+   tags, pushes, and wires the tag into the Lambda function resource.
 
-## What NOT to do
+Cold starts for a ~150 MB image at 1024 MB memory are typically 1-3s.
+Subsequent warm invocations are <50 ms. CloudFront caches the static
+frontend aggressively, so most visitors never hit a cold Lambda.
 
-- Do not use S3 as a key-value lookup backend for an on-demand API server.
-  S3 GET latency is 50-200ms; the in-memory dict we have today does lookups
-  in microseconds. If we outgrow RAM on one box, move to DynamoDB or LMDB,
-  not S3 per-key.
-- Do not put the whole thesaurus in a single S3 object and fetch it on every
-  request. That defeats the "lazy" part. Per-word files (Phase 2) or
-  in-memory on the server (Phase 1/3) are the two real options.
-- Do not add a graph DB (Neo4j/Neptune) until we've actually outgrown an
-  in-memory dict, which we won't at WordNet scale.
+## Why two stacks, not one
+
+Blast-radius isolation. The CI role is scoped so it can only update
+`PythonGraphsApp` -- it has no permission to delete the hosted zone,
+the cert, or itself. A compromised GitHub token can take down the site
+for ~5 minutes (bad deploy) but can't permanently hijack DNS or cert.
+
+## Cost estimate (ballpark)
+
+At trivial personal traffic:
+
+- Route53 hosted zone: **$0.50/mo**
+- Route53 queries: ~$0 (first 1B queries nearly free)
+- CloudFront: ~$0 within the free tier (1 TB / 10M requests / month)
+- Lambda: ~$0 within the free tier (1M requests + 400,000 GB-seconds)
+- ACM cert: **$0**
+- ECR storage: ~$0 (few MB)
+- Data transfer: trivial
+
+**Expected total: $0.50 - $2 / month** depending on traffic.
+
+## See also
+
+- [../README.md](../README.md) -- main project README
+- [BOOTSTRAP.md](./BOOTSTRAP.md) -- one-time setup instructions
+- [../.github/workflows/deploy.yml](../.github/workflows/deploy.yml) -- CI pipeline
